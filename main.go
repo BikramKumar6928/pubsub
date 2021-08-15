@@ -2,53 +2,17 @@ package main
 
 import (
 	"fmt"
+	"pubsub/models"
 	"sync"
+	"time"
+
+	"github.com/google/uuid"
 )
 
-// *********************  Models begin  *********************
-
-type Topic struct {
-	topicId            string
-	subscriptionIdList []string
-}
-
-func (topic *Topic) deleteSubscription(subscriptionIdToDelete string) {
-	indexToDelete := -1
-	subscriptionIdList := topic.subscriptionIdList
-
-	for index, subscriptionId := range subscriptionIdList {
-		if subscriptionId == subscriptionIdToDelete {
-			indexToDelete = index
-			break
-		}
-	}
-	if indexToDelete == -1 {
-		return
-	}
-	subscriptionIdList[indexToDelete] = subscriptionIdList[len(subscriptionIdList)-1]
-	topic.subscriptionIdList = subscriptionIdList[:len(subscriptionIdList)-1]
-}
-
-type Subscription struct {
-	subscriptionId       string
-	topicId              string
-	subscriptionFunction func(message string)
-}
-
-type Message struct {
-	messageId      string
-	messageContent string
-	topicId        string
-}
-
-// *********************  Models end  *********************
-
-// *********************  Pubsub begin  *********************
-
 type PubSub struct {
-	topicMap                   map[string]Topic
-	subscriptionMap            map[string]Subscription
-	messageMap                 map[string]Message
+	topicMap                   map[string]models.Topic
+	subscriptionMap            map[string]models.Subscription
+	messageMap                 map[string]models.Message
 	currentlyProcessedMessages map[string][]string
 	lock                       sync.Mutex
 }
@@ -71,16 +35,16 @@ func (pubsub *PubSub) deleteSubscriptionFromCurrentlyProcessed(subscriptionIdToD
 }
 
 func (pubsub *PubSub) Initialize() PubSub {
-	pubsub.topicMap = make(map[string]Topic)
-	pubsub.subscriptionMap = make(map[string]Subscription)
-	pubsub.messageMap = make(map[string]Message)
+	pubsub.topicMap = make(map[string]models.Topic)
+	pubsub.subscriptionMap = make(map[string]models.Subscription)
+	pubsub.messageMap = make(map[string]models.Message)
 	pubsub.currentlyProcessedMessages = make(map[string][]string)
 	return *pubsub
 }
 
 func (pubSub *PubSub) CreateTopic(topicId string) {
-	topic := Topic{
-		topicId: topicId,
+	topic := models.Topic{
+		TopicId: topicId,
 	}
 	pubSub.topicMap[topicId] = topic
 	fmt.Printf("Added %v topic to system\n", topicId)
@@ -93,24 +57,26 @@ func (pubSub *PubSub) DeleteTopic(topicId string) {
 
 // Under work
 func (pubSub *PubSub) AddSubscription(topicId string, subscriptionId string) {
-	newSubscription := Subscription{
-		subscriptionId: subscriptionId,
-		topicId:        topicId,
+	newSubscription := models.Subscription{
+		SubscriptionId: subscriptionId,
+		TopicId:        topicId,
 	}
 
 	topicStruct := pubSub.topicMap[topicId]
-	topicStruct.subscriptionIdList = append(topicStruct.subscriptionIdList, subscriptionId)
+	topicStruct.SubscriptionIdList = append(topicStruct.SubscriptionIdList, subscriptionId)
+	pubSub.topicMap[topicId] = topicStruct
+
 	pubSub.subscriptionMap[subscriptionId] = newSubscription
 
 	fmt.Printf("newSubscription: %v\n", newSubscription)
-	fmt.Printf("Added %v subscription to system", subscriptionId)
+	fmt.Printf("Added %v subscription to system \n", subscriptionId)
 }
 
 func (pubSub *PubSub) DeleteSubscription(subscriptionId string) {
 	subscriptionMap := pubSub.subscriptionMap
-	topicId := subscriptionMap[subscriptionId].topicId
+	topicId := subscriptionMap[subscriptionId].TopicId
 	topic := pubSub.topicMap[topicId]
-	topic.deleteSubscription(subscriptionId)
+	topic.DeleteSubscription(subscriptionId)
 	delete(subscriptionMap, subscriptionId)
 }
 
@@ -118,44 +84,47 @@ func (pubSub *PubSub) DeleteSubscription(subscriptionId string) {
 func (pubSub *PubSub) Publish(topicId string, message string) {
 	topic := pubSub.topicMap[topicId]
 	messageId := genUUID()
-	messageStruct := Message{
-		messageId:      messageId,
-		messageContent: message,
-		topicId:        topicId,
+	messageStruct := models.Message{
+		MessageId:      messageId,
+		MessageContent: message,
+		TopicId:        topicId,
 	}
 	pubSub.messageMap[messageId] = messageStruct
-	pubSub.currentlyProcessedMessages[messageId] = make([]string, 100)
+	pubSub.currentlyProcessedMessages[messageId] = make([]string, 0)
 
-	for _, subscriptionId := range topic.subscriptionIdList {
+	for _, subscriptionId := range topic.SubscriptionIdList {
 		subscription := pubSub.subscriptionMap[subscriptionId]
 		pubSub.lock.Lock()
 		defer pubSub.lock.Unlock()
 		pubSub.currentlyProcessedMessages[messageId] = append(pubSub.currentlyProcessedMessages[messageId], subscriptionId)
-		go subscription.subscriptionFunction(message)
+		go subscription.SubscriptionFunction(message)
 	}
 }
 
 func (pubSub *PubSub) Retry() {
-	pubSub.lock.Lock()
-	defer pubSub.lock.Unlock()
-	for messageId, subscriptionIdList := range pubSub.currentlyProcessedMessages {
-		for _, subscriptionId := range subscriptionIdList {
-			subscription := pubSub.subscriptionMap[subscriptionId]
-			message := pubSub.messageMap[messageId]
-			go subscription.subscriptionFunction(message.messageContent)
+	for {
+		pubSub.lock.Lock()
+		for messageId, subscriptionIdList := range pubSub.currentlyProcessedMessages {
+			for _, subscriptionId := range subscriptionIdList {
+				subscription := pubSub.subscriptionMap[subscriptionId]
+				message := pubSub.messageMap[messageId]
+				go subscription.SubscriptionFunction(message.MessageContent)
+			}
 		}
+		pubSub.lock.Unlock()
+		time.Sleep(10 * time.Second)
 	}
-	// sleep for some time
 }
 
 func genUUID() string {
-	return "random-uuid"
+	return uuid.NewString()
 }
 
 // Under work
 func (pubSub *PubSub) Subscribe(subscriptionId string, subscriberFunc func(message string)) {
 	subscriber := pubSub.subscriptionMap[subscriptionId]
-	subscriber.subscriptionFunction = subscriberFunc
+	subscriber.SubscriptionFunction = subscriberFunc
+	pubSub.subscriptionMap[subscriptionId] = subscriber
 }
 
 // Under work
@@ -177,18 +146,17 @@ func main() {
 	pubSub := PubSub{}
 	pubSub.Initialize()
 	pubSub.CreateTopic("topic1")
-	fmt.Println(pubSub)
 	pubSub.DeleteTopic("topic1")
-	fmt.Println(pubSub)
 
 	pubSub.CreateTopic("topic1")
-	fmt.Println(pubSub)
 	pubSub.AddSubscription("topic1", "subscription1")
-	fmt.Println(pubSub)
 
 	pubSub.Subscribe("subscription1", func(message string) {
 		fmt.Printf("message: %v\n", message)
 	})
 
 	pubSub.Publish("topic1", "Message")
+	go pubSub.Retry()
+
+	time.Sleep(30 * time.Second)
 }
