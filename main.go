@@ -34,12 +34,14 @@ func (pubsub *PubSub) deleteSubscriptionFromCurrentlyProcessed(subscriptionIdToD
 	pubsub.currentlyProcessedMessages[messageId] = listToDeleteFrom[:len(listToDeleteFrom)-1]
 }
 
-func (pubsub *PubSub) Initialize() PubSub {
+func InitializePubSub() *PubSub {
+	pubsub := PubSub{}
 	pubsub.topicMap = make(map[string]models.Topic)
 	pubsub.subscriptionMap = make(map[string]models.Subscription)
 	pubsub.messageMap = make(map[string]models.Message)
 	pubsub.currentlyProcessedMessages = make(map[string][]string)
-	return *pubsub
+	go pubsub.Retry()
+	return &pubsub
 }
 
 func (pubSub *PubSub) CreateTopic(topicId string) {
@@ -55,7 +57,6 @@ func (pubSub *PubSub) DeleteTopic(topicId string) {
 	fmt.Printf("Removed %v topic from system\n", topicId)
 }
 
-// Under work
 func (pubSub *PubSub) AddSubscription(topicId string, subscriptionId string) {
 	newSubscription := models.Subscription{
 		SubscriptionId: subscriptionId,
@@ -80,8 +81,7 @@ func (pubSub *PubSub) DeleteSubscription(subscriptionId string) {
 	delete(subscriptionMap, subscriptionId)
 }
 
-// Under work
-func (pubSub *PubSub) Publish(topicId string, message string) {
+func (pubSub *PubSub) Publish(topicId string, message string) string {
 	topic := pubSub.topicMap[topicId]
 	messageId := genUUID()
 	messageStruct := models.Message{
@@ -99,6 +99,7 @@ func (pubSub *PubSub) Publish(topicId string, message string) {
 		pubSub.currentlyProcessedMessages[messageId] = append(pubSub.currentlyProcessedMessages[messageId], subscriptionId)
 		go subscription.SubscriptionFunction(message)
 	}
+	return messageId
 }
 
 func (pubSub *PubSub) Retry() {
@@ -120,14 +121,12 @@ func genUUID() string {
 	return uuid.NewString()
 }
 
-// Under work
 func (pubSub *PubSub) Subscribe(subscriptionId string, subscriberFunc func(message string)) {
 	subscriber := pubSub.subscriptionMap[subscriptionId]
 	subscriber.SubscriptionFunction = subscriberFunc
 	pubSub.subscriptionMap[subscriptionId] = subscriber
 }
 
-// Under work
 func (pubSub *PubSub) UnSubscribe(subscriptionId string) {
 	pubSub.DeleteSubscription(subscriptionId)
 }
@@ -143,20 +142,35 @@ func (pubSub *PubSub) Ack(subscriptionId string, messageId string) {
 // *********************  Main ****************************
 
 func main() {
-	pubSub := PubSub{}
-	pubSub.Initialize()
-	pubSub.CreateTopic("topic1")
-	pubSub.DeleteTopic("topic1")
+	topicId := "topic1"
+	subscriptionId := "subscription1"
 
-	pubSub.CreateTopic("topic1")
-	pubSub.AddSubscription("topic1", "subscription1")
+	pubSub := InitializePubSub()
+	pubSub.CreateTopic(topicId)
+	fmt.Println("Topic Map :- ", pubSub.topicMap)
+	pubSub.DeleteTopic(topicId)
+	fmt.Println("Topic Map :- ", pubSub.topicMap)
+	pubSub.CreateTopic(topicId)
+	fmt.Println("Topic Map :- ", pubSub.topicMap)
+	pubSub.AddSubscription(topicId, subscriptionId)
+	fmt.Println("Topic Map :- ", pubSub.topicMap)
+	fmt.Println("Subscription Map :- ", pubSub.subscriptionMap)
 
-	pubSub.Subscribe("subscription1", func(message string) {
+	pubSub.Subscribe(subscriptionId, func(message string) {
 		fmt.Printf("message: %v\n", message)
 	})
+	fmt.Println("Subscription Map :- ", pubSub.subscriptionMap)
 
-	pubSub.Publish("topic1", "Message")
-	go pubSub.Retry()
+	messageId := pubSub.Publish(topicId, "Message")
+
+	fmt.Println("Waiting for retry to come into action")
 
 	time.Sleep(30 * time.Second)
+
+	fmt.Println("Acknowledged. Retry should stop")
+
+	pubSub.Ack(subscriptionId, messageId)
+
+	time.Sleep(30 * time.Second)
+
 }
